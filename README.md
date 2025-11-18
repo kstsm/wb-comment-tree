@@ -20,7 +20,7 @@ git clone https://github.com/kstsm/wb-comment-tree
 ### 2. Настройка переменных окружения
 Создайте `.env` файл, скопировав в него значения из `env.example`:
 ```bash
-cp env.example .env
+cp .env.example .env
 ```
 
 ### 3. Запуск зависимостей (Docker)
