@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>CommentTree</title>
+    <style>
+        :root{font-family:Inter,Roboto,Arial,sans-serif;color:#111}
+        body{margin:0;padding:20px;background:#f7f8fa}
+        .container{max-width:900px;margin:0 auto;background:#fff;padding:18px;border-radius:8px;box-shadow:0 6px 20px rgba(12,17,43,0.08)}
+        h1{text-align:center;margin:0 0 18px;font-size:22px}
+        .controls{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            flex-wrap:wrap;
+            gap:12px;
+            margin-bottom:18px;
+        }
+        .left-side, .right-side{
+            display:flex;
+            gap:10px;
+            align-items:center;
+            flex-wrap:wrap;
+        }
+        input[type=text],textarea,select{
+            padding:8px;border:1px solid #d7dbe5;
+            border-radius:6px;font-size:14px;
+            box-sizing:border-box;
+        }
+        textarea{resize:vertical;min-height:80px;width:100%}
+        button{
+            padding:8px 12px;border:0;background:#2563eb;
+            color:#fff;border-radius:6px;cursor:pointer;font-size:14px
+        }
+        button:disabled{opacity:.55;cursor:not-allowed}
+        button.ghost{background:#e6eefc;color:#1f4ed8}
+        .comment{border-left:2px solid #eef2ff;padding:8px 12px;margin:8px 0;border-radius:6px;background:#fbfdff}
+        .meta{font-size:12px;color:#6b7280;margin-bottom:6px}
+        .content{white-space:pre-wrap;margin-bottom:8px}
+        .actions{display:flex;gap:8px;flex-wrap:wrap}
+        .children{margin-left:18px;margin-top:8px}
+        .reply-form textarea{width:100%}
+        .small{font-size:13px;padding:6px 8px}
+        .error{color:#b91c1c;margin-top:8px}
+        .page-size{width:84px}
+        #comments:empty::after{content:"Здесь пока нет комментариев";display:block;padding:12px;color:#6b7280}
+        .badge{padding:2px 6px;border-radius:4px;background:#e0e7ff;color:#1d3abf;font-size:12px;margin-left:6px}
+        .new-root-form{
+            margin-bottom:20px;
+            padding:14px;
+            background:#f3f6ff;
+            border-radius:8px;
+        }
+        .new-root-form h3{
+            margin:0 0 8px;
+            font-size:18px;
+            font-weight:600;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <h1>CommentTree</h1>
+
+    <div class="new-root-form">
+        <h3>Добавить комментарий</h3>
+        <textarea id="newContent" placeholder="Введите текст комментария..."></textarea>
+        <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+            <button id="createRoot">Отправить</button>
+            <div id="createError" class="error" role="alert"></div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="left-side">
+            <input id="searchInput" type="text" placeholder="Поиск по комментариям..." />
+            <button id="searchBtn">Найти</button>
+            <button id="clearSearchBtn" class="ghost">Сброс</button>
+        </div>
+
+        <div class="right-side">
+            <label>Порядок:
+                <select id="order">
+                    <option value="desc">По убыванию</option>
+                    <option value="asc">По возрастанию</option>
+                </select>
+            </label>
+            <label>кол-во комментариев:
+                <input id="pageSize" class="page-size" type="number" min="1" value="10" />
+            </label>
+        </div>
+    </div>
+
+    <div id="globalError" class="error" role="alert" style="display:none"></div>
+
+    <div id="comments" aria-live="polite"></div>
+
+    <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <button id="prevPage" class="small ghost">← Предыдущая</button>
+        <div id="pageInfo" style="min-width:140px">Страница 1</div>
+        <button id="nextPage" class="small ghost">Следующая →</button>
+    </div>
+
+    <script>
+        const state={page:1,pageSize:10,sortBy:'created_at',order:'desc',search:''};
+        const commentsEl=document.getElementById('comments');
+        const pageInfoEl=document.getElementById('pageInfo');
+        const prevPageBtn=document.getElementById('prevPage');
+        const nextPageBtn=document.getElementById('nextPage');
+        const searchInput=document.getElementById('searchInput');
+        const searchBtn=document.getElementById('searchBtn');
+        const clearSearchBtn=document.getElementById('clearSearchBtn');
+        const orderSelect=document.getElementById('order');
+        const pageSizeInput=document.getElementById('pageSize');
+        const createBtn=document.getElementById('createRoot');
+        const newContentInput=document.getElementById('newContent');
+        const createErrorEl=document.getElementById('createError');
+        const globalErrorEl=document.getElementById('globalError');
+
+        async function apiFetch(path,options={}){
+            const headers=Object.assign({'Accept':'application/json'},options.headers||{});
+            if(options.body&&!headers['Content-Type'])headers['Content-Type']='application/json';
+            const response=await fetch(path,{...options,headers});
+            let data=null;
+            try{data=await response.json();}catch(_){data=null;}
+            if(!response.ok){
+                const msg=data&&(data.error||data.message)?(data.error||data.message):'Ошибка запроса';
+                throw new Error(msg);
+            }
+            if(data&&typeof data==='object'&&'result'in data)return data.result;
+            return data;
+        }
+
+        function setGlobalError(msg){
+            if(!msg){globalErrorEl.style.display='none';globalErrorEl.textContent='';return;}
+            globalErrorEl.style.display='block';globalErrorEl.textContent=msg;
+        }
+
+        function formatDate(v){
+            try{return new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'}).format(new Date(v));}
+            catch(_){return v;}
+        }
+
+        function renderComments(list){
+            commentsEl.innerHTML='';
+            const f=document.createDocumentFragment();
+            list.forEach(c=>f.appendChild(createCommentNode(c)));
+            commentsEl.appendChild(f);
+        }
+
+        function createCommentNode(comment){
+            const w=document.createElement('div');
+            w.className='comment';
+
+            const meta=document.createElement('div');
+            meta.className='meta';
+            meta.textContent=`#${comment.id} • создан ${formatDate(comment.created_at)}`;
+            if(comment.updated_at&&comment.updated_at!==comment.created_at){
+                const b=document.createElement('span');
+                b.className='badge';
+                b.textContent='обновлён '+formatDate(comment.updated_at);
+                meta.appendChild(b);
+            }
+            w.appendChild(meta);
+
+            const content=document.createElement('div');
+            content.className='content';
+            content.textContent=comment.comment;
+            w.appendChild(content);
+
+            const actions=document.createElement('div');
+            actions.className='actions';
+
+            const replyBtn=document.createElement('button');
+            replyBtn.className='small';
+            replyBtn.textContent='Ответить';
+            actions.appendChild(replyBtn);
+
+            const delBtn=document.createElement('button');
+            delBtn.className='small ghost';
+            delBtn.textContent='Удалить';
+            actions.appendChild(delBtn);
+
+            w.appendChild(actions);
+
+            const replyForm=buildReplyForm(comment.id);
+            replyForm.style.display='none';
+            w.appendChild(replyForm);
+
+            replyBtn.addEventListener('click',()=>replyForm.style.display=replyForm.style.display==='none'?'block':'none');
+
+            delBtn.addEventListener('click',async()=>{
+                if(!window.confirm(`Удалить комментарий #${comment.id}?`))return;
+                delBtn.disabled=true;
+                setGlobalError('');
+                try{
+                    await apiFetch(`/comments/${comment.id}`,{method:'DELETE'});
+                    await loadComments();
+                }catch(e){setGlobalError(e.message);}
+                finally{delBtn.disabled=false;}
+            });
+
+            if(comment.children&&comment.children.length){
+                const ch=document.createElement('div');
+                ch.className='children';
+                comment.children.forEach(c=>ch.appendChild(createCommentNode(c)));
+                w.appendChild(ch);
+            }
+            return w;
+        }
+
+        function buildReplyForm(parentId){
+            const w=document.createElement('div');
+            w.className='reply-form';
+
+            const ta=document.createElement('textarea');
+            ta.rows=3;
+            ta.placeholder='Ответить на комментарий...';
+            w.appendChild(ta);
+
+            const row=document.createElement('div');
+            row.style.display='flex';
+            row.style.gap='8px';
+            row.style.marginTop='8px';
+
+            const submit=document.createElement('button');
+            submit.textContent='Отправить';
+            row.appendChild(submit);
+
+            const cancel=document.createElement('button');
+            cancel.textContent='Отмена';
+            cancel.type='button';
+            cancel.className='ghost';
+            row.appendChild(cancel);
+
+            const err=document.createElement('div');
+            err.className='error';
+            err.style.flex='1';
+
+            cancel.addEventListener('click',()=>{
+                ta.value='';
+                err.textContent='';
+                w.style.display='none';
+            });
+
+            submit.addEventListener('click',async()=>{
+                const text=ta.value.trim();
+                if(!text){err.textContent='Текст не может быть пустым';return;}
+                submit.disabled=true;
+                err.textContent='';
+                try{
+                    await createComment({parent_id:parentId,comment:text});
+                    ta.value='';
+                    w.style.display='none';
+                    await loadComments();
+                }catch(e){err.textContent=e.message;}
+                finally{submit.disabled=false;}
+            });
+
+            w.appendChild(row);
+            w.appendChild(err);
+            return w;
+        }
+
+        async function createComment(p){
+            return apiFetch('/comments/',{
+                method:'POST',
+                body:JSON.stringify(p)
+            });
+        }
+
+        function buildQuery(){
+            const p=new URLSearchParams({
+                page:state.page.toString(),
+                page_size:state.pageSize.toString(),
+                sort_by:'created_at',
+                order:state.order
+            });
+            if(state.search)p.set('search',state.search);
+            return p.toString();
+        }
+
+        async function loadComments(){
+            setGlobalError('');
+            commentsEl.innerHTML='<div style="color:#374151;font-size:13px">Загрузка...</div>';
+            try{
+                const data=await apiFetch(`/comments/?${buildQuery()}`);
+                const comments=data&&Array.isArray(data.comments)?data.comments:[];
+                const total=typeof(data&&data.total)==='number'?data.total:null;
+                renderComments(comments);
+                updatePagination(data&&typeof data.page==='number'?data.page:state.page,total);
+            }catch(e){
+                setGlobalError(e.message);
+                commentsEl.innerHTML='';
+            }
+        }
+
+        function updatePagination(page,total){
+            state.page=page;
+            const hasTotal=Number.isFinite(total)&&total>=0;
+
+            const totalPages=hasTotal
+                ? Math.max(1,Math.ceil(Math.max(total||0,0)/state.pageSize))
+                : state.page+(commentsEl.children.length===state.pageSize?1:0);
+
+            pageInfoEl.textContent=hasTotal
+                ? `Страница ${page} из ${totalPages} (${total} всего)`
+                : `Страница ${page}`;
+
+            prevPageBtn.disabled=state.page<=1;
+            nextPageBtn.disabled=hasTotal?state.page>=totalPages:commentsEl.children.length<state.pageSize;
+        }
+
+        async function handleCreateRoot(){
+            const text=newContentInput.value.trim();
+            if(!text){
+                createErrorEl.textContent='Введите текст комментария';
+                return;
+            }
+            createErrorEl.textContent='';
+            createBtn.disabled=true;
+            try{
+                await createComment({comment:text});
+                newContentInput.value='';
+                state.page=1;
+                await loadComments();
+            }catch(e){createErrorEl.textContent=e.message;}
+            finally{createBtn.disabled=false;}
+        }
+
+        prevPageBtn.addEventListener('click',()=>{if(state.page>1){state.page--;loadComments();}});
+        nextPageBtn.addEventListener('click',()=>{state.page++;loadComments();});
+
+        searchBtn.addEventListener('click',()=>{state.search=searchInput.value.trim();state.page=1;loadComments();});
+        searchInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();searchBtn.click();}});
+        clearSearchBtn.addEventListener('click',()=>{searchInput.value='';if(state.search){state.search='';state.page=1;loadComments();}});
+
+        orderSelect.addEventListener('change',()=>{state.order=orderSelect.value;state.page=1;loadComments();});
+        pageSizeInput.addEventListener('change',()=>{
+            const v=parseInt(pageSizeInput.value,10);
+            state.pageSize=Number.isFinite(v)&&v>0?v:10;
+            pageSizeInput.value=state.pageSize;
+            state.page=1;
+            loadComments();
+        });
+
+        createBtn.addEventListener('click',handleCreateRoot);
+        document.addEventListener('DOMContentLoaded',()=>loadComments());
+    </script>
+
+</div>
+</body>
+</html>
